@@ -6,7 +6,7 @@ import difflib
 import re 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Corrector Asana Pro", page_icon="✅", layout="wide")
+st.set_page_config(page_title="Corrector Asana", page_icon="✅", layout="wide")
 
 # --- CONSTANTES ---
 UMBRAL_APROBACION = 0.75
