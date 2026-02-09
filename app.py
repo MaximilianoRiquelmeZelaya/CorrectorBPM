@@ -11,6 +11,7 @@ st.set_page_config(page_title="Corrector Asana", page_icon="✅", layout="wide")
 # --- CONSTANTES ---
 UMBRAL_APROBACION = 0.75
 SECCION_PREDETERMINADA = "Inducción Ingreso Personal Nuevo/Contratista"
+NOMBRE_SUBTAREA_A_CERRAR = "Verificación" # Nombre subtarea
 
 # --- CONFIGURACIÓN DE RESPUESTAS ---
 RESPUESTAS_CORRECTAS = {
@@ -68,6 +69,51 @@ RESPUESTAS_CORRECTAS = {
 def limpiar_texto(texto):
     if not isinstance(texto, str): return []
     return re.findall(r'\w+', texto.lower())
+
+def buscar_y_cerrar_subtarea(tasks_api, parent_task_gid, nombre_objetivo):
+    """
+    Busca una subtarea y la cierra. 
+    Versión BLINDADA (Usa argumentos nombrados para evitar errores de API).
+    """
+    print(f"\n--- Buscando subtarea: '{nombre_objetivo}' en tarea padre {parent_task_gid} ---")
+    
+    try:
+        # 1. Buscar
+        opts_lectura = {'opt_fields': 'name,gid,completed'}
+        subtareas = list(tasks_api.get_subtasks_for_task(parent_task_gid, opts_lectura))
+        
+        print(f"   > Se encontraron {len(subtareas)} subtareas.")
+
+        for sub in subtareas:
+            s_data = sub.to_dict() if hasattr(sub, 'to_dict') else sub
+            
+            nombre_real = s_data['name'].strip().lower()
+            nombre_buscado = nombre_objetivo.strip().lower()
+            
+            if nombre_buscado in nombre_real:
+                print(f"   >>> ¡COINCIDENCIA! ID: {s_data['gid']}")
+                
+                if not s_data['completed']:
+                    # --- CORRECCIÓN DEFINITIVA ---
+                    # Usamos nombres explícitos (task_gid=, body=, opts=)
+                    # para que la librería no se confunda de lugar.
+                    tasks_api.update_task(
+                        task_gid=s_data['gid'], 
+                        body={'data': {'completed': True}}, 
+                        opts={}
+                    )
+                    print("   >>> ¡CERRADA CON ÉXITO!")
+                    return "cerrada"
+                else:
+                    print("   >>> Ya estaba cerrada.")
+                    return "ya_estaba_cerrada"
+        
+        print("   > No se encontró ninguna coincidencia.")
+        return "no_encontrada"
+
+    except Exception as e:
+        print(f"   !!! ERROR CRÍTICO: {e}")
+        return "error"
 
 def validar_texto_inteligente(texto_usuario, grupos_palabras, minimo_requerido):
     if not texto_usuario: return False, []
@@ -264,7 +310,7 @@ if st.session_state.tareas_cargadas:
     if 'Seleccionar' not in df_f.columns: df_f.insert(0, "Seleccionar", True)
     
     edited = st.data_editor(
-        df_f, hide_index=True, use_container_width=True,
+        df_f, hide_index=True, width="stretch",
         column_config={"gid": st.column_config.TextColumn("ID", disabled=True), "custom_fields": None},
         key=f"edit_{len(filtro_resp)}"
     )
@@ -296,20 +342,33 @@ if st.session_state.tareas_cargadas:
                     
                     if puntaje >= UMBRAL_APROBACION:
                         ap += 1
-                        # CAMBIO 3: Agregamos str_puntos al mensaje
+                        # Mensaje base
                         msg = f"✅ Tarea Aprobada ({puntaje*100:.0f}% | {str_puntos})."
                         
                         detalles = ""
                         if errores: detalles += f"\n\n⚠️ Observaciones menores:\n{txt_err}"
                         if obs_positivas: detalles += f"\n\n📝 Detalle de respuestas abiertas:\n{txt_pos}"
+                        msg += detalles if detalles else " ¡Excelente trabajo!"
                         
-                        msg += detalles if detalles else " ¡Excelente trabajo, sin errores!"
+                        # --- CAMBIO IMPORTANTE AQUÍ ---
+                        # 1. Intentamos cerrar la SUBTAREA específica
+                        resultado_sub = buscar_y_cerrar_subtarea(tasks_api, gid, NOMBRE_SUBTAREA_A_CERRAR)
                         
-                        tasks_api.update_task(task_gid=gid, body={'data':{'completed':True}}, opts={})
+                        texto_log_extra = ""
+                        if resultado_sub == "cerrada":
+                            texto_log_extra = f"(Subtarea '{NOMBRE_SUBTAREA_A_CERRAR}' cerrada)"
+                        elif resultado_sub == "no_encontrada":
+                            texto_log_extra = f"(⚠️ No se encontró la subtarea '{NOMBRE_SUBTAREA_A_CERRAR}')"
+                            # Opcional: Avisar en el comentario que no se halló la subtarea
+                            msg += f"\n\n⚠️ Nota: No pude encontrar la subtarea '{NOMBRE_SUBTAREA_A_CERRAR}' para cerrarla."
+
+                        # 2. Publicamos el comentario en la tarea PADRE
                         stories_api.create_story_for_task(task_gid=gid, body={'data':{'text':msg}}, opts={})
                         
-                        # CAMBIO 4: Lo mostramos en el log visual
-                        log.write(f"&nbsp;&nbsp; ✅ APROBADO ({str_puntos})")
+                        # NOTA: Ya NO cerramos la tarea padre (gid).
+                        # tasks_api.update_task(task_gid=gid, body={'data':{'completed':True}}, opts={}) 
+                        
+                        log.write(f"   ✅ APROBADO {texto_log_extra}")
                     else:
                         rp += 1
                         # CAMBIO 5: Agregamos str_puntos al mensaje de reprobado
