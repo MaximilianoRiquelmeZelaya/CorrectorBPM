@@ -6,7 +6,7 @@ import difflib
 import re 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Corrector Asana", page_icon="✅", layout="wide")
+st.set_page_config(page_title="Corrector Asana", page_icon="🤖", layout="wide")
 
 # --- CONSTANTES ---
 UMBRAL_APROBACION = 0.75
@@ -95,8 +95,6 @@ def buscar_y_cerrar_subtarea(tasks_api, parent_task_gid, nombre_objetivo):
                 
                 if not s_data['completed']:
                     # --- CORRECCIÓN DEFINITIVA ---
-                    # Usamos nombres explícitos (task_gid=, body=, opts=)
-                    # para que la librería no se confunda de lugar.
                     tasks_api.update_task(
                         task_gid=s_data['gid'], 
                         body={'data': {'completed': True}}, 
@@ -174,7 +172,7 @@ def evaluar_tarea(task_custom_fields):
     puntos_obtenidos = 0
     total_preguntas = len(RESPUESTAS_CORRECTAS)
     errores = []
-    observaciones_positivas = [] # NUEVA LISTA para guardar los aciertos con detalle
+    observaciones_positivas = [] 
 
     campos_tarea = {}
     for field in task_custom_fields:
@@ -235,13 +233,12 @@ def evaluar_tarea(task_custom_fields):
         else:
             msg_correcta = formatear_valor(criterio)
             
-            # --- CAMBIO AQUÍ ---
             # Solo construimos la línea de estado si es una pregunta abierta (tiene info_extra)
             linea_estado = f"   • Estado: Incorrecta {info_extra}\n" if info_extra else ""
             
             errores.append(
                 f"❌ Pregunta: {pregunta}\n"
-                f"{linea_estado}" # Esta línea estará vacía en preguntas cerradas
+                f"{linea_estado}" 
                 f"   • Tu respuesta: {msg_usuario}\n"
                 f"   • Requisito: {msg_correcta}"
             )
@@ -260,6 +257,8 @@ with st.sidebar:
     st.header("🔐 Configuración")
     token_input = st.text_input("PAT", type="password")
     gid_input = st.text_input("GID")
+    # --- CAMBIO: Campo para escribir el nombre del responsable ---
+    responsable_input = st.text_input("Nombre del Responsable", value="")
     
     if st.button("📂 Buscar Secciones"):
         if token_input and gid_input:
@@ -332,26 +331,27 @@ if st.session_state.tareas_cargadas:
             if task:
                 log.write(f"🔍 **{task['name']}** ({task['assignee_name']})")
                 if 'custom_fields' in task:
-                    # Obtenemos errores Y observaciones positivas
+                    
                     puntaje, errores, obs_positivas, puntos, total = evaluar_tarea(task['custom_fields'])
                     
                     txt_err = "\n".join(errores)
-                    txt_pos = "\n".join(obs_positivas) # Texto de los aciertos detallados
-                    
+                    txt_pos = "\n".join(obs_positivas)
                     str_puntos = f"{puntos}/{total} pts"
+                    
+                    # --- CAMBIO: Definimos el encabezado ---
+                    encabezado_mensaje = f"🧠Sistema de revision automatica ejecutado por {responsable_input}\n"
                     
                     if puntaje >= UMBRAL_APROBACION:
                         ap += 1
-                        # Mensaje base
-                        msg = f"✅ Tarea Aprobada ({puntaje*100:.0f}% | {str_puntos})."
+                        
+                        # Agregamos el encabezado al mensaje aprobado
+                        msg = f"{encabezado_mensaje}✅ Tarea Aprobada ({puntaje*100:.0f}% | {str_puntos})."
                         
                         detalles = ""
                         if errores: detalles += f"\n\n⚠️ Observaciones menores:\n{txt_err}"
                         if obs_positivas: detalles += f"\n\n📝 Detalle de respuestas abiertas:\n{txt_pos}"
                         msg += detalles if detalles else " ¡Excelente trabajo!"
                         
-                        # --- CAMBIO IMPORTANTE AQUÍ ---
-                        # 1. Intentamos cerrar la SUBTAREA específica
                         resultado_sub = buscar_y_cerrar_subtarea(tasks_api, gid, NOMBRE_SUBTAREA_A_CERRAR)
                         
                         texto_log_extra = ""
@@ -359,20 +359,15 @@ if st.session_state.tareas_cargadas:
                             texto_log_extra = f"(Subtarea '{NOMBRE_SUBTAREA_A_CERRAR}' cerrada)"
                         elif resultado_sub == "no_encontrada":
                             texto_log_extra = f"(⚠️ No se encontró la subtarea '{NOMBRE_SUBTAREA_A_CERRAR}')"
-                            # Opcional: Avisar en el comentario que no se halló la subtarea
                             msg += f"\n\n⚠️ Nota: No pude encontrar la subtarea '{NOMBRE_SUBTAREA_A_CERRAR}' para cerrarla."
 
-                        # 2. Publicamos el comentario en la tarea PADRE
                         stories_api.create_story_for_task(task_gid=gid, body={'data':{'text':msg}}, opts={})
-                        
-                        # NOTA: Ya NO cerramos la tarea padre (gid).
-                        # tasks_api.update_task(task_gid=gid, body={'data':{'completed':True}}, opts={}) 
                         
                         log.write(f"   ✅ APROBADO {texto_log_extra}")
                     else:
                         rp += 1
-                        # CAMBIO 5: Agregamos str_puntos al mensaje de reprobado
-                        msg = f"🤖 Reprobado ({puntaje*100:.0f}% | {str_puntos}).\nSe requiere corrección:\n\n{txt_err}"
+                        # Agregamos el encabezado al mensaje reprobado
+                        msg = f"{encabezado_mensaje}🤖 Reprobado ({puntaje*100:.0f}% | {str_puntos}).\nSe requiere corrección:\n\n{txt_err}"
                         stories_api.create_story_for_task(task_gid=gid, body={'data':{'text':msg}}, opts={})
                         log.write(f"&nbsp;&nbsp; ❌ REPROBADO ({str_puntos})")
         
